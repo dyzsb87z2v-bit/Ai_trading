@@ -20,8 +20,13 @@ export interface WatchlistRow {
   dataStatus: string | null;
 }
 
+/** Sort keys the spec asks for (§25). */
+export type WatchlistSort = "symbol" | "score" | "changePercent";
+
 interface WatchlistPanelProps {
   rows: WatchlistRow[];
+  sort?: WatchlistSort;
+  onSortChange?: (sort: WatchlistSort) => void;
   activeSymbol: string;
   onSelect: (symbol: string) => void;
   onAdd: (symbol: string) => void;
@@ -32,6 +37,8 @@ interface WatchlistPanelProps {
 
 export function WatchlistPanel({
   rows,
+  sort = "symbol",
+  onSortChange,
   activeSymbol,
   onSelect,
   onAdd,
@@ -39,8 +46,41 @@ export function WatchlistPanel({
   draft,
   onDraftChange,
 }: WatchlistPanelProps) {
+  /**
+   * Sort a copy, never the prop. A row with no computed value sorts LAST in
+   * every mode: an unranked symbol is not a zero-scoring one.
+   */
+  const sorted = [...rows].sort((a, b) => {
+    if (sort === "symbol") return a.symbol.localeCompare(b.symbol);
+    const key = sort === "score" ? "score" : "changePercent";
+    const left = a[key];
+    const right = b[key];
+    if (left === null && right === null) return a.symbol.localeCompare(b.symbol);
+    if (left === null) return 1;
+    if (right === null) return -1;
+    return right - left;
+  });
+
   return (
     <div className="flex h-full flex-col gap-2">
+      {onSortChange ? (
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wide text-muted">Sort</span>
+          {(["symbol", "score", "changePercent"] as const).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onSortChange(key)}
+              className={`rounded px-1.5 py-0.5 text-[10px] ${
+                sort === key ? "bg-surface-2 text-text" : "text-muted hover:text-text"
+              }`}
+            >
+              {key === "changePercent" ? "Change" : key === "score" ? "Score" : "A–Z"}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <form
         className="flex gap-1.5"
         onSubmit={(event) => {
@@ -62,7 +102,7 @@ export function WatchlistPanel({
       </form>
 
       <div className="flex flex-col gap-1 overflow-y-auto">
-        {rows.map((row) => {
+        {sorted.map((row) => {
           const active = row.symbol === activeSymbol;
           return (
             <div
@@ -142,7 +182,7 @@ export function WatchlistPanel({
           );
         })}
 
-        {rows.length === 0 ? (
+        {sorted.length === 0 ? (
           <p className="px-2 py-4 text-center text-[11px] text-text-muted">
             Watchlist is empty. Add a symbol above.
           </p>

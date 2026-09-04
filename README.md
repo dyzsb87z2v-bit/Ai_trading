@@ -4,8 +4,8 @@ A standalone trading-analysis terminal: explainable signals, a mandatory risk
 engine, look-ahead-free backtesting and paper trading.
 
 > **What this is not.** It does not predict prices, does not guarantee outcomes,
-> and does not place orders. It is a decision-support and risk-control tool.
-> `NO TRADE` and `WAIT` are first-class results.
+> and does not place orders on its own. It is a decision-support and
+> risk-control tool. `NO TRADE` and `WAIT` are first-class results.
 
 Self-contained: its own Next.js app, its own SQLite database, its own auth, its
 own UI. No external service is required to run it.
@@ -32,7 +32,7 @@ that data as live — see [Demo mode](#demo-mode).
 | ----------------------------- | -------------------------- |
 | `npm run dev`                 | Dev server on port 4310    |
 | `npm run build` / `npm start` | Production build and serve |
-| `npm test`                    | 220 unit tests             |
+| `npm test`                    | 332 unit tests             |
 | `npm run typecheck`           | Strict TypeScript check    |
 | `npm run lint`                | ESLint                     |
 | `npm run check`               | All three                  |
@@ -82,30 +82,49 @@ everything above it.
 
 ## What's inside
 
-| Area                             | Location                                        |
-| -------------------------------- | ----------------------------------------------- |
-| Domain types, provenance         | `src/lib/trading/types.ts`                      |
-| Freshness gate, series integrity | `src/lib/trading/freshness.ts`                  |
-| Provider contracts + registry    | `src/lib/trading/providers/`                    |
-| Indicators                       | `src/lib/trading/indicators/`                   |
-| Market structure                 | `src/lib/trading/structure.ts`                  |
-| Multi-timeframe                  | `src/lib/trading/mtf.ts`                        |
-| Regime detection                 | `src/lib/trading/regime.ts`                     |
-| Signal + Trade Quality Score     | `src/lib/trading/signal.ts`                     |
-| Entry / stop / targets           | `src/lib/trading/entry.ts`                      |
-| Position sizing                  | `src/lib/trading/positionSizing.ts`             |
-| Risk engine (13 checks)          | `src/lib/trading/riskEngine.ts`                 |
-| Backtester                       | `src/lib/trading/backtest.ts`                   |
-| Paper trading                    | `src/lib/trading/paperTrading.ts`               |
-| Portfolio + journal              | `src/lib/trading/portfolio.ts`                  |
-| Copilot evidence packet          | `src/lib/trading/copilot.ts`                    |
-| Orchestrator                     | `src/lib/trading/analysisService.ts`            |
-| Persistence                      | `src/lib/db/`                                   |
-| UI                               | `src/app/terminal/`, `src/components/terminal/` |
+| Area                             | Location                             |
+| -------------------------------- | ------------------------------------ |
+| Domain types, provenance         | `src/lib/trading/types.ts`           |
+| Freshness gate, series integrity | `src/lib/trading/freshness.ts`       |
+| Provider contracts + registry    | `src/lib/trading/providers/`         |
+| Indicators                       | `src/lib/trading/indicators/`        |
+| Market structure                 | `src/lib/trading/structure.ts`       |
+| Multi-timeframe                  | `src/lib/trading/mtf.ts`             |
+| Regime detection                 | `src/lib/trading/regime.ts`          |
+| Signal + Trade Quality Score     | `src/lib/trading/signal.ts`          |
+| Entry / stop / targets           | `src/lib/trading/entry.ts`           |
+| Position sizing                  | `src/lib/trading/positionSizing.ts`  |
+| Risk engine (13 checks)          | `src/lib/trading/riskEngine.ts`      |
+| Backtester                       | `src/lib/trading/backtest.ts`        |
+| Strategy Lab (rule compiler)     | `src/lib/trading/strategyLab.ts`     |
+| Market scanner                   | `src/lib/trading/scanner.ts`         |
+| Alert engine                     | `src/lib/trading/alerts.ts`          |
+| Position monitor / reassessment  | `src/lib/trading/positionMonitor.ts` |
+| Daily report packet              | `src/lib/trading/dailyReport.ts`     |
+| Streaming runtime                | `src/lib/trading/streaming.ts`       |
+| Paper trading                    | `src/lib/trading/paperTrading.ts`    |
+| Portfolio + journal              | `src/lib/trading/portfolio.ts`       |
+| Copilot evidence packet          | `src/lib/trading/copilot.ts`         |
+| Orchestrator                     | `src/lib/trading/analysisService.ts` |
+| Persistence                      | `src/lib/db/`                        |
+| UI                               | `src/app/`, `src/components/`        |
 
 Indicators: SMA, EMA, WMA, Wilder smoothing, RSI, MACD, Bollinger, ATR, ADX/DI,
 Stochastic, CCI, ROC, realised volatility, OBV, session-anchored VWAP, volume
 profile, relative volume, Fibonacci.
+
+### Screens
+
+| Page          | Shows                                                                 |
+| ------------- | --------------------------------------------------------------------- |
+| `/terminal`   | Chart with drawing tools, watchlist, signal, levels, sizing, Copilot  |
+| `/scanner`    | Rank a symbol list by setup quality; failures are listed, not dropped |
+| `/alerts`     | Alert rules and their fired events                                    |
+| `/strategies` | Strategy Lab presets and backtest results                             |
+| `/portfolio`  | Open paper positions, exposure and correlation                        |
+| `/journal`    | Closed trades, notes and statistics                                   |
+
+Navigation is a desktop sidebar and a fixed mobile bottom bar (`AppNav.tsx`).
 
 ---
 
@@ -131,6 +150,11 @@ The places where a plausible implementation is wrong:
 - **Relative volume excludes the current bar** from its own baseline.
 - **Position sizes round down**, and maximum loss **includes fees and slippage**.
 - **Profit factor is `null`, not `Infinity`,** when nothing was lost.
+- **The newest live bar is still forming.** Ageing it from its _close_ time
+  would mark every live feed `STALE`; the freshness gate ages it from
+  `min(closeTime, now)`. A bar whose **open** is in the future is still a fault.
+- **Levels and sizing share one reference price.** The plan's own entry feeds
+  the sizing call, so the two can never quote different numbers.
 
 ---
 
@@ -144,6 +168,63 @@ The places where a plausible implementation is wrong:
    that does not exist.
 
 Slippage and half-spread always work against the fill.
+
+---
+
+## Strategy Lab
+
+Strategies are a declarative rule tree (`IF` / `AND` / `OR` / `THEN`) compiled by
+`compileStrategy()` into the same `Strategy` callback the backtester takes. The
+tree is **data**, never code: an `eval`'d user strategy would be remote code
+execution, so the compiler walks a validated AST with a depth limit instead.
+
+`validateStrategyDefinition()` returns every issue at once, and `compileStrategy`
+refuses to compile a definition with any. Five presets ship: EMA 20/50 cross,
+RSI oversold reversal, trend + momentum + volume, confirmed breakout, VWAP
+reclaim.
+
+---
+
+## Scanner
+
+`scanMarkets()` runs the full analysis pipeline over a symbol list and ranks the
+results. It classifies each into zero or more of ten setup kinds: strong trend,
+breakout, momentum, volume spike, oversold, overbought, VWAP reclaim, EMA cross,
+high volatility, compression.
+
+A symbol whose data is not tradeable is ranked **below every tradeable one**
+rather than dropped, and symbols that failed outright come back in
+`ScanResult.failures`. A scanner that silently omits what it could not read
+tells you the market is quiet when in fact your feed is down.
+
+---
+
+## Alerts
+
+Fifteen alert kinds (price above/below, percent change, breakout/breakdown, RSI
+bands, MACD cross, volume spike, volatility, support/resistance touch, signal
+change, stop hit, target hit) across four channels: browser, email, Telegram,
+push.
+
+Alerts are **edge-triggered**: `crossedUp` / `crossedDown` return false when
+there is no previous observation, so arming a rule does not immediately fire it
+for a condition that was already true. The trigger state is persisted, so a
+restart does not re-fire history.
+
+`dispatchAlerts()` reports an unconfigured channel as a **failed** delivery with
+the reason. An alert you believe was sent and was not is worse than no alert.
+
+---
+
+## Position monitoring
+
+`monitorPosition()` tracks an open position against its plan — distance to stop
+and targets, drawdown, and whether the thesis still holds. `reassessSignal()`
+compares the current signal against the one that opened the position and reports
+what changed.
+
+Neither has an order path. They tell you the trade has changed; the decision
+stays yours.
 
 ---
 
@@ -169,7 +250,8 @@ the deterministic engines already computed and explains them.
 
 A model asked to "analyse the chart" will invent a support level; a model handed
 computed levels and told to explain them cannot, because the numbers are fixed.
-Missing sections render as `UNAVAILABLE` so the model cannot fill a gap.
+Missing sections render as `UNAVAILABLE` so the model cannot fill a gap. The
+daily report (`/api/report`) is built the same way.
 
 The system prompt is prepended **server-side**, so a client cannot replace it.
 Replies are audited for guaranteed-profit and fabricated-probability claims —
@@ -186,19 +268,29 @@ every score and level on the page is still computed.
 
 ## Providers
 
-### Binance (included, no API key)
+Every adapter is **off by default**. `isEnabled()` accepts only `1`, `true`,
+`yes` or `on`, so a stray value never quietly turns a data source on.
 
-The one shipped adapter. Binance's public spot market-data endpoints need no
-credentials, so real prices work with a single flag:
+| Kind            | Adapter          | Env                               |
+| --------------- | ---------------- | --------------------------------- |
+| Market data     | Binance (crypto) | `BINANCE_ENABLED`                 |
+| Market data     | Twelve Data      | `TWELVEDATA_ENABLED` + `_API_KEY` |
+| News            | Finnhub          | `FINNHUB_ENABLED` + `_API_KEY`    |
+| Economic events | Finnhub          | same key                          |
+| Fundamentals    | Finnhub          | same key                          |
+| Broker          | Alpaca           | `ALPACA_ENABLED` + key/secret     |
 
-```bash
-BINANCE_ENABLED=true
-```
+`getActive*Provider()` returns the first **configured** adapter — registration
+alone is not enough, so a half-set-up vendor never silently becomes the source.
+With nothing configured, each read path reports `DATA SOURCE UNAVAILABLE`.
 
-Symbols are Binance spot pairs — `BTCUSDT`, `ETHUSDT`. **Not** `BTCUSD`. An
-unknown symbol returns Binance's own error plus a hint about the format; the
-adapter never rewrites a symbol, because labelling one instrument's data with
-another's name is exactly the quiet corruption this project avoids.
+### Binance
+
+Binance's public spot endpoints need no credentials, so real prices work with a
+single flag. Symbols are Binance spot pairs — `BTCUSDT`, `ETHUSDT`. **Not**
+`BTCUSD`. An unknown symbol returns Binance's own error plus a hint about the
+format; the adapter never rewrites a symbol, because labelling one instrument's
+data with another's name is exactly the quiet corruption this project avoids.
 
 Failure modes are distinguished rather than flattened: `RATE_LIMITED` (429),
 `IP_BANNED` (418), `PROVIDER_ERROR` (Binance's own `{code,msg}`),
@@ -208,25 +300,38 @@ result — never a fabricated price.
 `weightedAvgPrice` becomes the quote's VWAP because that is Binance's own 24h
 VWAP. If the order-book call fails, bid/ask stay `null` rather than guessed.
 
-Its unit tests stub `fetch` and make no network call.
+### Twelve Data
+
+Covers stocks, ETFs, indices, forex and crypto with one key, so it is registered
+**ahead of** Binance when both are on. Twelve Data returns errors with HTTP 200
+and a `status: "error"` body; the adapter reads the body, not the status code.
+
+### Alpaca (broker)
+
+**Read-only by default**, and points at the paper host. Three independent
+switches stand between a connection and a live order — `ALPACA_ENABLED`,
+`ALPACA_LIVE`, `ALPACA_TRADING_ENABLED` — and without the third the adapter
+refuses every order regardless of what the caller asks for.
 
 ### Adding another
-
-Every other provider kind — news, fundamentals, economic calendar, broker —
-ships unregistered, so those read paths report `DATA SOURCE UNAVAILABLE`.
-
-To add one:
 
 1. Implement the interface in `src/lib/trading/providers/types.ts`. Every method
    returns `Availability<T>`, and an adapter must never synthesise a value it
    did not receive upstream.
-2. Call `registerTradingProvider(adapter)` at startup.
+2. Call `registerTradingProvider(adapter)` at startup (see `bootstrap.ts`).
 
-`getActive*Provider()` returns the first **configured** adapter — registration
-alone is not enough, so a half-set-up vendor never silently becomes the source.
+All adapters share `providers/adapters/http.ts`, which classifies transport
+failures rather than collapsing them into one error.
 
-**Broker adapters are read-only by default.** Live execution stays off unless an
-operator turns it on.
+## Streaming
+
+`StreamRuntime` consumes `MarketDataProvider.subscribe()` with exponential
+backoff (capped), batched flushes and a reconnect loop. Its clock and timers are
+injected, so the tests drive reconnection deterministically without waiting.
+
+`applyQuoteToCandle()` folds a quote into the forming bar. Volume takes the
+**max**, not the sum: a quote reports the bar's cumulative volume so far, and
+adding it repeatedly would inflate every live bar.
 
 ## Demo mode
 
@@ -245,20 +350,30 @@ a data provider and must never become one.
 
 All routes require a session cookie.
 
-| Route                                     | Method        | Purpose                                  |
-| ----------------------------------------- | ------------- | ---------------------------------------- |
-| `/api/auth/login` · `/logout` · `/status` | POST/POST/GET | Session                                  |
-| `/api/providers`                          | GET           | Which providers are configured           |
-| `/api/market/series`                      | GET           | Candles + quote (real, or SIMULATED)     |
-| `/api/analyze`                            | POST          | Full pipeline + Copilot evidence packet  |
-| `/api/position-size`                      | POST          | Sizing with true maximum loss            |
-| `/api/risk-settings`                      | GET/PUT       | Read/update risk limits                  |
-| `/api/backtest`                           | POST          | Backtest a named built-in strategy       |
-| `/api/copilot`                            | POST          | Model narrative over the evidence packet |
+| Route                                       | Method                | Purpose                                   |
+| ------------------------------------------- | --------------------- | ----------------------------------------- |
+| `/api/auth/login` · `/logout` · `/status`   | POST/POST/GET         | Session                                   |
+| `/api/providers`                            | GET                   | Which providers are configured            |
+| `/api/market/series`                        | GET                   | Candles + quote (real, or SIMULATED)      |
+| `/api/analyze`                              | POST                  | Full pipeline + Copilot evidence packet   |
+| `/api/scan`                                 | POST                  | Rank a symbol list, with failures         |
+| `/api/alerts`                               | GET/POST/PATCH/DELETE | Alert rules                               |
+| `/api/alerts/events`                        | GET                   | Fired alert events                        |
+| `/api/alerts/evaluate`                      | POST                  | Evaluate rules against current data       |
+| `/api/strategies`                           | GET/POST/DELETE       | Strategy Lab presets and definitions      |
+| `/api/backtest`                             | POST                  | Backtest a preset or a compiled rule tree |
+| `/api/paper`                                | GET/POST              | Paper positions, exposure and correlation |
+| `/api/journal`                              | GET/POST              | Trade journal entries                     |
+| `/api/position-size`                        | POST                  | Sizing with true maximum loss             |
+| `/api/risk-settings`                        | GET/PUT               | Read/update risk limits                   |
+| `/api/news` · `/calendar` · `/fundamentals` | GET                   | Provider reads (UNAVAILABLE if unset)     |
+| `/api/broker`                               | GET                   | Broker account/positions, read-only       |
+| `/api/report`                               | POST                  | Daily report over computed evidence       |
+| `/api/copilot`                              | POST                  | Model narrative over the evidence packet  |
 
 `riskPerTradeFraction` is capped at `0.1` in the route schema as well as in the
-engine. Backtest strategies are chosen from a fixed named set — an endpoint that
-`eval`'d a user-supplied strategy would be remote code execution.
+engine. Backtests run a named preset or a **validated rule tree** — never a
+user-supplied function.
 
 ---
 
@@ -268,9 +383,10 @@ engine. Backtest strategies are chosen from a fixed named set — an endpoint th
 - Session is a signed JWT (HS256) in an `httpOnly`, `sameSite=lax` cookie.
 - Without `AUTH_SECRET` the app refuses to issue sessions rather than falling
   back to a default key.
-- `/terminal` is gated **server-side**, so an unauthenticated visitor never
-  receives the page shell.
+- Every page except `/login` and `/setup` is gated **server-side**, so an
+  unauthenticated visitor never receives the page shell.
 - Upstream errors are never echoed verbatim.
+- No `eval` / `new Function` anywhere; strategies compile from an AST.
 
 Intended for localhost or a trusted network. Put it behind TLS and a reverse
 proxy before exposing it.
@@ -280,20 +396,27 @@ proxy before exposing it.
 ## Testing
 
 ```bash
-npm test        # 220 tests
+npm test        # 332 tests
 ```
 
-| File                         | Covers                                         |
-| ---------------------------- | ---------------------------------------------- |
-| `indicators.test.ts`         | Indicator maths against hand-derived values    |
-| `risk.test.ts`               | Sizing, the 13 risk checks, the entry engine   |
-| `analysis.test.ts`           | Freshness, structure, MTF, regime, signal      |
-| `execution.test.ts`          | Look-ahead prevention, paper-trading P&L       |
-| `portfolio-copilot.test.ts`  | Correlation, journal, evidence packet          |
-| `persistence.test.ts`        | Schema and upserts on a real SQLite database   |
-| `binance-adapter.test.ts`    | Adapter mapping and its whole failure taxonomy |
-| `provider-bootstrap.test.ts` | A provider is never enabled by accident        |
-| `orchestrator.test.ts`       | End-to-end verdicts and risk vetoes            |
+| File                         | Covers                                           |
+| ---------------------------- | ------------------------------------------------ |
+| `indicators.test.ts`         | Indicator maths against hand-derived values      |
+| `risk.test.ts`               | Sizing, the 13 risk checks, the entry engine     |
+| `analysis.test.ts`           | Freshness, structure, MTF, regime, signal        |
+| `execution.test.ts`          | Look-ahead prevention, paper-trading P&L         |
+| `portfolio-copilot.test.ts`  | Correlation, journal, evidence packet            |
+| `persistence.test.ts`        | Schema and upserts on a real SQLite database     |
+| `binance-adapter.test.ts`    | Adapter mapping and its whole failure taxonomy   |
+| `adapters.test.ts`           | Twelve Data, Finnhub, Alpaca, shared HTTP layer  |
+| `provider-bootstrap.test.ts` | A provider is never enabled by accident          |
+| `strategy-lab.test.ts`       | Rule validation, compilation, depth limit        |
+| `scanner-alerts.test.ts`     | Ranking, failure reporting, edge triggering      |
+| `monitor-report.test.ts`     | Position monitoring, reassessment, report packet |
+| `streaming.test.ts`          | Reconnect/backoff, quote folding                 |
+| `orchestrator.test.ts`       | End-to-end verdicts and risk vetoes              |
+
+Adapter tests stub `fetch` and make no network call.
 
 ---
 
@@ -301,15 +424,16 @@ npm test        # 220 tests
 
 Stated plainly so nothing is mistaken for complete:
 
-- **Only one market-data adapter** (Binance, crypto spot). No stocks, forex,
-  news, fundamentals, economic-calendar or broker adapters.
-- **No streaming runtime.** `MarketDataProvider.subscribe()` is defined but no
-  reconnect/backpressure loop consumes it.
-- **No market scanner**, no chart drawing tools.
-- **No paper-trading or journal UI.** Both engines exist and are tested; neither
-  has a screen yet.
-- **No broker adapters** and no live order submission path.
-- **No alerts**, no news or economic-calendar adapters.
+- **No live order submission.** The Alpaca adapter can read an account and is
+  wired for orders, but trading stays refused unless three separate switches are
+  set, and no UI path submits one.
+- **No options, futures or on-chain data.** Spot and equities only.
+- **No backtest walk-forward or parameter optimisation.** One pass, one
+  parameter set.
+- **No multi-user accounts, roles or audit trail.** One local operator.
+- **No push/email/Telegram credentials shipped** — those alert channels report
+  themselves unconfigured until you wire a dispatcher.
+- **No mobile app.** The UI is responsive; it is not native.
 
 ---
 

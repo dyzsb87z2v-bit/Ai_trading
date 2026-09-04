@@ -40,7 +40,26 @@ interface CandleChartProps {
   height?: number;
   /** Rendered as a watermark so the data's nature is visible on the chart. */
   watermark?: string;
+  drawings?: Drawing[];
+  activeTool?: DrawingTool;
+  onDraw?: (drawing: Drawing) => void;
 }
+
+/**
+ * A user-drawn annotation (§4). Coordinates are in DATA space — a price and a
+ * bar index — not pixels, so a drawing stays anchored to what it marks when the
+ * chart rescales or the window resizes.
+ */
+export type Drawing =
+  | { id: string; kind: "horizontal"; price: number }
+  | {
+      id: string;
+      kind: "trendline";
+      from: { index: number; price: number };
+      to: { index: number; price: number };
+    };
+
+export type DrawingTool = "none" | "horizontal" | "trendline";
 
 const PADDING = { top: 16, right: 62, bottom: 22, left: 8 };
 const VOLUME_BAND = 0.18;
@@ -52,8 +71,13 @@ export function CandleChart({
   plan = null,
   height = 420,
   watermark,
+  drawings = [],
+  activeTool = "none",
+  onDraw,
 }: CandleChartProps) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  /** First click of a two-click trendline, in data space. */
+  const [pendingPoint, setPendingPoint] = useState<{ index: number; price: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const width = 1000; // viewBox width; the SVG scales to its container.
 
@@ -124,14 +148,49 @@ export function CandleChart({
   const priceTicks = buildTicks(min, max, 6);
   const hovered = hoverIndex !== null ? candles[hoverIndex] : null;
 
-  const handleMove = (event: React.MouseEvent<SVGSVGElement>) => {
+  /** Map a mouse event into data space: bar index and price. */
+  const toDataSpace = (
+    event: React.MouseEvent<SVGSVGElement>
+  ): { index: number; price: number } | null => {
     const svg = svgRef.current;
-    if (!svg) return;
+    if (!svg) return null;
     const rect = svg.getBoundingClientRect();
-    // Map client pixels into viewBox units before inverting the x scale.
+    // Map client pixels into viewBox units before inverting either scale.
     const x = ((event.clientX - rect.left) / rect.width) * width;
+    const y = ((event.clientY - rect.top) / rect.height) * height;
     const index = Math.floor((x - PADDING.left) / slot);
-    setHoverIndex(index >= 0 && index < candles.length ? index : null);
+    // Invert yFor: y = top + priceHeight - ((price - min)/(max-min)) * priceHeight
+    const priceHeight = (height - PADDING.top - PADDING.bottom) * (1 - VOLUME_BAND);
+    const price = min + ((PADDING.top + priceHeight - y) / priceHeight) * (max - min);
+    if (!Number.isFinite(price)) return null;
+    return { index: Math.max(0, Math.min(candles.length - 1, index)), price };
+  };
+
+  const handleMove = (event: React.MouseEvent<SVGSVGElement>) => {
+    const point = toDataSpace(event);
+    setHoverIndex(point && point.index < candles.length ? point.index : null);
+  };
+
+  /**
+   * Drawing is click-based rather than drag-based: a horizontal line takes one
+   * click, a trendline takes two. Drag would fight the crosshair for the same
+   * gesture.
+   */
+  const handleClick = (event: React.MouseEvent<SVGSVGElement>) => {
+    if (activeTool === "none" || !onDraw) return;
+    const point = toDataSpace(event);
+    if (!point) return;
+
+    if (activeTool === "horizontal") {
+      onDraw({ id: `h-${Date.now()}`, kind: "horizontal", price: point.price });
+      return;
+    }
+    if (!pendingPoint) {
+      setPendingPoint(point);
+      return;
+    }
+    onDraw({ id: `t-${Date.now()}`, kind: "trendline", from: pendingPoint, to: point });
+    setPendingPoint(null);
   };
 
   const planLines: ChartLevel[] = plan
@@ -150,9 +209,10 @@ export function CandleChart({
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
         className="w-full select-none"
-        style={{ height }}
         onMouseMove={handleMove}
+        onClick={handleClick}
         onMouseLeave={() => setHoverIndex(null)}
+        style={{ height, cursor: activeTool === "none" ? "crosshair" : "copy" }}
         role="img"
         aria-label="Price chart"
       >
@@ -266,6 +326,50 @@ export function CandleChart({
             </g>
           );
         })}
+
+        {drawings.map((drawing) =>
+          drawing.kind === "horizontal" ? (
+            <g key={drawing.id}>
+              <line
+                x1={PADDING.left}
+                x2={width - PADDING.right}
+                y1={yFor(drawing.price)}
+                y2={yFor(drawing.price)}
+                stroke="#8b5cf6"
+                strokeWidth={1.2}
+              />
+              <text
+                x={width - PADDING.right - 4}
+                y={yFor(drawing.price) - 3}
+                textAnchor="end"
+                style={{ fontSize: 9, fontWeight: 600 }}
+                fill="#8b5cf6"
+              >
+                {formatPrice(drawing.price)}
+              </text>
+            </g>
+          ) : (
+            <line
+              key={drawing.id}
+              x1={xFor(drawing.from.index)}
+              y1={yFor(drawing.from.price)}
+              x2={xFor(drawing.to.index)}
+              y2={yFor(drawing.to.price)}
+              stroke="#8b5cf6"
+              strokeWidth={1.2}
+            />
+          )
+        )}
+
+        {/* The anchored first click of an in-progress trendline. */}
+        {pendingPoint ? (
+          <circle
+            cx={xFor(pendingPoint.index)}
+            cy={yFor(pendingPoint.price)}
+            r={3}
+            fill="#8b5cf6"
+          />
+        ) : null}
 
         {hoverIndex !== null && hovered ? (
           <g>

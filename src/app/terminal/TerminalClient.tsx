@@ -15,12 +15,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Alert, Badge, Button, Card, Input, Select, Spinner } from "@/components/ui";
+import { AppNav } from "@/components/AppNav";
 import { computeIndicatorSet } from "@/lib/trading/indicators";
-import { CandleChart, type ChartLevel, type ChartOverlay } from "@/components/terminal/CandleChart";
+import {
+  CandleChart,
+  type ChartLevel,
+  type ChartOverlay,
+  type Drawing,
+  type DrawingTool,
+} from "@/components/terminal/CandleChart";
 import { StatusStrip } from "@/components/terminal/StatusStrip";
 import { CopilotPanel } from "@/components/terminal/CopilotPanel";
 import { BottomPanels } from "@/components/terminal/BottomPanels";
-import { WatchlistPanel, type WatchlistRow } from "@/components/terminal/WatchlistPanel";
+import {
+  WatchlistPanel,
+  type WatchlistRow,
+  type WatchlistSort,
+} from "@/components/terminal/WatchlistPanel";
 import type {
   AnalysisView,
   ProviderStatusView,
@@ -66,6 +77,9 @@ export function TerminalClient() {
   const [error, setError] = useState<string | null>(null);
 
   const [equityDraft, setEquityDraft] = useState("");
+  const [watchlistSort, setWatchlistSort] = useState<WatchlistSort>("symbol");
+  const [drawings, setDrawings] = useState<Drawing[]>([]);
+  const [activeTool, setActiveTool] = useState<DrawingTool>("none");
   const [copilotText, setCopilotText] = useState<string | null>(null);
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotError, setCopilotError] = useState<string | null>(null);
@@ -194,6 +208,10 @@ export function TerminalClient() {
 
   useEffect(() => {
     void loadSymbol(activeSymbol, activeAssetClass, timeframe);
+    // Drawings belong to one symbol and timeframe: carrying them across would
+    // anchor a line drawn on one instrument onto another.
+    setDrawings([]);
+    setActiveTool("none");
   }, [activeSymbol, activeAssetClass, timeframe, loadSymbol]);
 
   const overlays: ChartOverlay[] = useMemo(() => {
@@ -286,7 +304,7 @@ export function TerminalClient() {
   }, [evidence]);
 
   return (
-    <div className="flex min-h-screen flex-col gap-3 p-4">
+    <div className="flex min-h-screen flex-col gap-3 p-4 pb-20 lg:pb-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-base font-semibold">AI Trading Terminal</h1>
@@ -294,7 +312,8 @@ export function TerminalClient() {
             Signals, risk control and trade planning. Analysis only — no orders are placed.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <AppNav />
           <label className="text-[10px] uppercase tracking-wide text-muted">Equity</label>
           <Input
             value={equityDraft}
@@ -366,6 +385,8 @@ export function TerminalClient() {
         <Card title="Watchlist" padding="sm" className="lg:h-full lg:overflow-hidden">
           <WatchlistPanel
             rows={watchlistRows}
+            sort={watchlistSort}
+            onSortChange={setWatchlistSort}
             activeSymbol={activeSymbol}
             onSelect={setActiveSymbol}
             onAdd={(symbol) => {
@@ -405,14 +426,37 @@ export function TerminalClient() {
               <Spinner />
             </div>
           ) : (
-            <CandleChart
-              candles={series?.candles ?? []}
-              overlays={overlays}
-              levels={chartLevels}
-              plan={analysis?.levels ?? null}
-              height={420}
-              watermark={analysis?.dataStatus === "SIMULATED" ? "SIMULATED" : undefined}
-            />
+            <>
+              <div className="mb-1 flex items-center gap-1">
+                <span className="text-[10px] uppercase tracking-wide text-muted">Draw</span>
+                {(["none", "horizontal", "trendline"] as const).map((tool) => (
+                  <Button
+                    key={tool}
+                    size="sm"
+                    variant={activeTool === tool ? "primary" : "ghost"}
+                    onClick={() => setActiveTool(tool)}
+                  >
+                    {tool === "none" ? "Off" : tool === "horizontal" ? "Level" : "Trendline"}
+                  </Button>
+                ))}
+                {drawings.length > 0 ? (
+                  <Button size="sm" variant="ghost" onClick={() => setDrawings([])}>
+                    Clear ({drawings.length})
+                  </Button>
+                ) : null}
+              </div>
+              <CandleChart
+                candles={series?.candles ?? []}
+                overlays={overlays}
+                levels={chartLevels}
+                plan={analysis?.levels ?? null}
+                height={420}
+                watermark={analysis?.dataStatus === "SIMULATED" ? "SIMULATED" : undefined}
+                drawings={drawings}
+                activeTool={activeTool}
+                onDraw={(drawing) => setDrawings((prev) => [...prev, drawing])}
+              />
+            </>
           )}
         </Card>
 
