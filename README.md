@@ -32,6 +32,22 @@ With no market-data provider configured the terminal runs on a clearly labelled
 `SIMULATED` series so the interface is usable immediately. It never presents
 that data as live — see [Demo mode](#demo-mode).
 
+### No computer? Run it from a browser
+
+The repository ships a dev container, so **GitHub Codespaces** runs the whole
+terminal in a browser tab — phone or tablet included, with no local install.
+
+1. Open the repository on GitHub → **Code** → **Codespaces** → **Create
+   codespace on main**.
+2. Wait for setup to finish. It runs `npm install && npm run setup`; the
+   generated password is printed at the end of that log. Copy it.
+3. In the terminal, run `npm run dev`. Codespaces forwards port 4310 and
+   offers the link — open it and sign in with that password.
+
+The forwarded port is **private to your GitHub account** by default. Leave it
+that way: this app authenticates one operator with one password and is not
+hardened for the open internet.
+
 | Command                       | Does                         |
 | ----------------------------- | ---------------------------- |
 | `npm run setup`               | Generate `.env` on first run |

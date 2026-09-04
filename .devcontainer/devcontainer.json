@@ -1,0 +1,22 @@
+{
+  "name": "AI Trading Terminal",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+
+  // Installs dependencies and writes .env with a generated secret and
+  // password. The password is printed once in the creation log.
+  "postCreateCommand": "npm install && npm run setup",
+
+  "forwardPorts": [4310],
+  "portsAttributes": {
+    "4310": {
+      "label": "Trading terminal",
+      "onAutoForward": "openBrowser"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
+    }
+  }
+}
