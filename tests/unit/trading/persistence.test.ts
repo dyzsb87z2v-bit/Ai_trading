@@ -333,3 +333,95 @@ test("orders: the same client order id cannot be inserted twice", () => {
   // Duplicate-order protection is a schema constraint, not only app logic.
   assert.throws(insert, /UNIQUE/i);
 });
+
+// ---------------------------------------------------------------------------
+// Alerts and strategies
+// ---------------------------------------------------------------------------
+
+test("alerts: create, list, toggle and delete", () => {
+  const alert = db.createAlert({ symbol: "AAPL", kind: "price_above", value: 200 });
+  assert.equal(alert.symbol, "AAPL");
+  assert.equal(alert.enabled, true);
+  assert.deepEqual(alert.channels, ["browser"]);
+
+  db.setAlertEnabled(alert.id, false);
+  assert.equal(db.getAlert(alert.id)?.enabled, false);
+
+  assert.equal(db.listAlerts("AAPL").length, 1);
+  db.deleteAlert(alert.id);
+  assert.equal(db.getAlert(alert.id), null);
+});
+
+test("alerts: edge-trigger state round-trips so a level rule cannot re-fire", () => {
+  const alert = db.createAlert({ symbol: "MSFT", kind: "price_above", value: 100 });
+  db.applyAlertStateUpdates([
+    { ruleId: alert.id, lastValue: 105, lastTriggeredAt: 1_700_000_000_000 },
+  ]);
+  const reloaded = db.getAlert(alert.id);
+  assert.equal(reloaded?.lastValue, 105);
+  assert.equal(reloaded?.lastTriggeredAt, 1_700_000_000_000);
+  db.deleteAlert(alert.id);
+});
+
+test("alerts: a signal_change rule persists the state it last saw", () => {
+  const alert = db.createAlert({ symbol: "NVDA", kind: "signal_change" });
+  db.applyAlertStateUpdates([
+    { ruleId: alert.id, lastValue: null, lastTriggeredAt: null, previousState: "BUY" },
+  ]);
+  assert.equal(db.getAlert(alert.id)?.previousState, "BUY");
+  db.deleteAlert(alert.id);
+});
+
+test("alert events: recorded, listed newest first, and acknowledgeable", () => {
+  const alert = db.createAlert({ symbol: "TSLA", kind: "price_above", value: 1 });
+  db.recordAlertEvents([
+    {
+      ruleId: alert.id,
+      symbol: "TSLA",
+      kind: "price_above",
+      message: "older",
+      observed: 2,
+      threshold: 1,
+      severity: "info",
+      triggeredAt: 1000,
+    },
+    {
+      ruleId: alert.id,
+      symbol: "TSLA",
+      kind: "price_above",
+      message: "newer",
+      observed: 3,
+      threshold: 1,
+      severity: "info",
+      triggeredAt: 2000,
+    },
+  ]);
+
+  const events = db.listAlertEvents(10);
+  assert.equal(events[0].message, "newer");
+  assert.equal(db.getAlert(alert.id)?.triggerCount, 2, "firing must bump the counter");
+
+  assert.equal(db.listAlertEvents(10, true).length, 2);
+  db.acknowledgeAlertEvents(events.map((e) => e.id));
+  assert.equal(db.listAlertEvents(10, true).length, 0);
+  db.deleteAlert(alert.id);
+});
+
+test("strategies: save, reload and delete a rule tree", () => {
+  const definition = {
+    name: "t",
+    side: "long",
+    entry: { all: [] },
+    stop: { type: "atr", multiple: 2 },
+  };
+  const saved = db.saveStrategy({ name: "My strategy", definition });
+  assert.equal(saved.name, "My strategy");
+  assert.equal((saved.definition as { name: string }).name, "t");
+
+  const updated = db.saveStrategy({ id: saved.id, name: "Renamed", definition });
+  assert.equal(updated.id, saved.id, "saving with an id must update, not duplicate");
+  assert.equal(db.listStrategies().filter((s) => s.id === saved.id).length, 1);
+
+  db.deleteStrategy(saved.id);
+  assert.equal(db.getStrategy(saved.id), null);
+});

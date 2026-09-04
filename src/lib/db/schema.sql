@@ -196,3 +196,47 @@ CREATE TABLE IF NOT EXISTS provider_connections (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_connections_kind_provider
   ON provider_connections(kind, provider_id);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id TEXT PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  value REAL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  channels TEXT NOT NULL DEFAULT '["browser"]',
+  cooldown_ms INTEGER,
+  -- Edge-triggering state: without these a level rule would re-fire forever.
+  last_value REAL,
+  previous_state TEXT,
+  last_triggered_at INTEGER,
+  trigger_count INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts(symbol, enabled);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+  id TEXT PRIMARY KEY,
+  rule_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  message TEXT NOT NULL,
+  observed REAL,
+  threshold REAL,
+  severity TEXT NOT NULL DEFAULT 'info',
+  triggered_at INTEGER NOT NULL,
+  acknowledged INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_alert_events_triggered
+  ON alert_events(triggered_at DESC);
+
+CREATE TABLE IF NOT EXISTS strategies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  -- Serialised rule tree from the Strategy Lab. Never executable code.
+  definition TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);

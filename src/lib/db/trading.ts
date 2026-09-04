@@ -581,3 +581,284 @@ export function listBacktests(symbol?: string, limit = 50): BacktestSummary[] {
     createdAt: row.created_at as string,
   }));
 }
+
+// ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
+
+export interface StoredAlert {
+  id: string;
+  symbol: string;
+  kind: string;
+  value: number | null;
+  enabled: boolean;
+  channels: string[];
+  cooldownMs: number | null;
+  lastValue: number | null;
+  previousState: string | null;
+  lastTriggeredAt: number | null;
+  triggerCount: number;
+  note: string | null;
+}
+
+function mapAlert(row: Row): StoredAlert {
+  return {
+    id: row.id as string,
+    symbol: row.symbol as string,
+    kind: row.kind as string,
+    value: (row.value as number | null) ?? null,
+    enabled: row.enabled === 1,
+    channels: parseJson<string[]>(row.channels, ["browser"]),
+    cooldownMs: (row.cooldown_ms as number | null) ?? null,
+    lastValue: (row.last_value as number | null) ?? null,
+    previousState: (row.previous_state as string | null) ?? null,
+    lastTriggeredAt: (row.last_triggered_at as number | null) ?? null,
+    triggerCount: row.trigger_count as number,
+    note: (row.note as string | null) ?? null,
+  };
+}
+
+export function createAlert(input: {
+  symbol: string;
+  kind: string;
+  value?: number | null;
+  enabled?: boolean;
+  channels?: readonly string[];
+  cooldownMs?: number | null;
+  note?: string | null;
+}): StoredAlert {
+  const id = randomUUID();
+  const timestamp = nowIso();
+  getDb()
+    .prepare(
+      `INSERT INTO alerts (id, symbol, kind, value, enabled, channels, cooldown_ms, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      input.symbol,
+      input.kind,
+      input.value ?? null,
+      input.enabled === false ? 0 : 1,
+      JSON.stringify(input.channels ?? ["browser"]),
+      input.cooldownMs ?? null,
+      input.note ?? null,
+      timestamp,
+      timestamp
+    );
+  return getAlert(id) as StoredAlert;
+}
+
+export function getAlert(id: string): StoredAlert | null {
+  const row = getDb().prepare("SELECT * FROM alerts WHERE id = ?").get(id) as Row | undefined;
+  return row ? mapAlert(row) : null;
+}
+
+export function listAlerts(symbol?: string): StoredAlert[] {
+  const db = getDb();
+  const rows = (
+    symbol
+      ? db.prepare("SELECT * FROM alerts WHERE symbol = ? ORDER BY created_at DESC").all(symbol)
+      : db.prepare("SELECT * FROM alerts ORDER BY created_at DESC").all()
+  ) as Row[];
+  return rows.map(mapAlert);
+}
+
+export function setAlertEnabled(id: string, enabled: boolean): void {
+  getDb()
+    .prepare("UPDATE alerts SET enabled = ?, updated_at = ? WHERE id = ?")
+    .run(enabled ? 1 : 0, nowIso(), id);
+}
+
+export function deleteAlert(id: string): void {
+  getDb().prepare("DELETE FROM alerts WHERE id = ?").run(id);
+}
+
+/**
+ * Persist the edge-triggering state the alert engine returned. Without this the
+ * engine has no memory and a level rule would re-fire on every evaluation.
+ */
+export function applyAlertStateUpdates(
+  updates: readonly {
+    ruleId: string;
+    lastValue: number | null;
+    lastTriggeredAt: number | null;
+    previousState?: string;
+  }[]
+): void {
+  if (updates.length === 0) return;
+  const db = getDb();
+  const statement = db.prepare(
+    `UPDATE alerts
+     SET last_value = ?, last_triggered_at = ?, previous_state = COALESCE(?, previous_state),
+         updated_at = ?
+     WHERE id = ?`
+  );
+  const write = db.transaction((rows: typeof updates) => {
+    const timestamp = nowIso();
+    for (const update of rows) {
+      statement.run(
+        update.lastValue,
+        update.lastTriggeredAt,
+        update.previousState ?? null,
+        timestamp,
+        update.ruleId
+      );
+    }
+  });
+  write(updates);
+}
+
+export interface StoredAlertEvent {
+  id: string;
+  ruleId: string;
+  symbol: string;
+  kind: string;
+  message: string;
+  observed: number | null;
+  threshold: number | null;
+  severity: string;
+  triggeredAt: number;
+  acknowledged: boolean;
+}
+
+export function recordAlertEvents(
+  events: readonly {
+    ruleId: string;
+    symbol: string;
+    kind: string;
+    message: string;
+    observed: number | null;
+    threshold: number | null;
+    severity: string;
+    triggeredAt: number;
+  }[]
+): void {
+  if (events.length === 0) return;
+  const db = getDb();
+  const insert = db.prepare(
+    `INSERT INTO alert_events
+       (id, rule_id, symbol, kind, message, observed, threshold, severity, triggered_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const bump = db.prepare("UPDATE alerts SET trigger_count = trigger_count + 1 WHERE id = ?");
+  const write = db.transaction((rows: typeof events) => {
+    for (const event of rows) {
+      insert.run(
+        randomUUID(),
+        event.ruleId,
+        event.symbol,
+        event.kind,
+        event.message,
+        event.observed,
+        event.threshold,
+        event.severity,
+        event.triggeredAt
+      );
+      bump.run(event.ruleId);
+    }
+  });
+  write(events);
+}
+
+export function listAlertEvents(limit = 100, unacknowledgedOnly = false): StoredAlertEvent[] {
+  const db = getDb();
+  const rows = (
+    unacknowledgedOnly
+      ? db
+          .prepare(
+            "SELECT * FROM alert_events WHERE acknowledged = 0 ORDER BY triggered_at DESC LIMIT ?"
+          )
+          .all(limit)
+      : db.prepare("SELECT * FROM alert_events ORDER BY triggered_at DESC LIMIT ?").all(limit)
+  ) as Row[];
+  return rows.map((row) => ({
+    id: row.id as string,
+    ruleId: row.rule_id as string,
+    symbol: row.symbol as string,
+    kind: row.kind as string,
+    message: row.message as string,
+    observed: (row.observed as number | null) ?? null,
+    threshold: (row.threshold as number | null) ?? null,
+    severity: row.severity as string,
+    triggeredAt: row.triggered_at as number,
+    acknowledged: row.acknowledged === 1,
+  }));
+}
+
+export function acknowledgeAlertEvents(ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  const db = getDb();
+  const statement = db.prepare("UPDATE alert_events SET acknowledged = 1 WHERE id = ?");
+  const write = db.transaction((rows: readonly string[]) => {
+    for (const id of rows) statement.run(id);
+  });
+  write(ids);
+}
+
+// ---------------------------------------------------------------------------
+// Strategies
+// ---------------------------------------------------------------------------
+
+export interface StoredStrategy {
+  id: string;
+  name: string;
+  description: string | null;
+  definition: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function mapStrategy(row: Row): StoredStrategy {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    description: (row.description as string | null) ?? null,
+    definition: parseJson<Record<string, unknown>>(row.definition, {}),
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export function saveStrategy(input: {
+  id?: string;
+  name: string;
+  description?: string | null;
+  definition: unknown;
+}): StoredStrategy {
+  const db = getDb();
+  const timestamp = nowIso();
+  const id = input.id ?? randomUUID();
+  db.prepare(
+    `INSERT INTO strategies (id, name, description, definition, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       description = excluded.description,
+       definition = excluded.definition,
+       updated_at = excluded.updated_at`
+  ).run(
+    id,
+    input.name,
+    input.description ?? null,
+    JSON.stringify(input.definition),
+    timestamp,
+    timestamp
+  );
+  return getStrategy(id) as StoredStrategy;
+}
+
+export function getStrategy(id: string): StoredStrategy | null {
+  const row = getDb().prepare("SELECT * FROM strategies WHERE id = ?").get(id) as Row | undefined;
+  return row ? mapStrategy(row) : null;
+}
+
+export function listStrategies(): StoredStrategy[] {
+  return (getDb().prepare("SELECT * FROM strategies ORDER BY updated_at DESC").all() as Row[]).map(
+    mapStrategy
+  );
+}
+
+export function deleteStrategy(id: string): void {
+  getDb().prepare("DELETE FROM strategies WHERE id = ?").run(id);
+}

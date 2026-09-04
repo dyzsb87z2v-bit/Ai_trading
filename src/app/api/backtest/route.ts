@@ -10,10 +10,14 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/guard";
 import { recordBacktest } from "@/lib/db/trading";
-import { runBacktest, type Strategy } from "@/lib/trading/backtest";
+import { runBacktest } from "@/lib/trading/backtest";
 import { normalizeCandles } from "@/lib/trading/freshness";
-import { computeIndicatorSet, latest } from "@/lib/trading/indicators";
-import { atr } from "@/lib/trading/indicators/volatility";
+import {
+  STRATEGY_PRESETS,
+  compileStrategy,
+  validateStrategyDefinition,
+  type StrategyDefinition,
+} from "@/lib/trading/strategyLab";
 import { ALL_TIMEFRAMES, type Timeframe } from "@/lib/trading/types";
 
 const candleSchema = z.object({
@@ -29,86 +33,15 @@ const bodySchema = z.object({
   symbol: z.string().min(1).max(64),
   timeframe: z.enum(ALL_TIMEFRAMES as unknown as [Timeframe, ...Timeframe[]]),
   candles: z.array(candleSchema).min(60).max(20_000),
-  strategy: z.enum(["ema-cross", "rsi-reversal", "breakout"]),
+  // Either a shipped preset by id, or a full rule tree. Never code.
+  preset: z.enum(Object.keys(STRATEGY_PRESETS) as [string, ...string[]]).optional(),
+  definition: z.record(z.string(), z.unknown()).optional(),
   initialCapital: z.number().positive().max(1_000_000_000),
   riskPerTrade: z.number().min(0.0001).max(0.1),
   commissionRate: z.number().min(0).max(0.1).default(0.0005),
   slippageRate: z.number().min(0).max(0.1).default(0.0005),
   persist: z.boolean().default(false),
 });
-
-/**
- * Built-in strategies.
- *
- * Each reads only `context.candles` (bars 0..i), so none can see the future.
- * Stops are ATR-based rather than a fixed percentage, so they scale with the
- * instrument's own volatility.
- */
-function buildStrategy(name: "ema-cross" | "rsi-reversal" | "breakout"): Strategy {
-  return (context) => {
-    const candles = context.candles;
-    if (candles.length < 60) return { action: "none" };
-
-    const closes = candles.map((c) => c.close);
-    const highs = candles.map((c) => c.high);
-    const lows = candles.map((c) => c.low);
-    const price = closes[closes.length - 1];
-    const atrValue = latest(atr(highs, lows, closes, 14));
-    if (atrValue === null || atrValue <= 0) return { action: "none" };
-
-    const indicators = computeIndicatorSet(candles);
-    const stop = price - atrValue * 2;
-    const target = price + atrValue * 4;
-
-    if (name === "ema-cross") {
-      const fast = latest(indicators.ema20);
-      const slow = latest(indicators.ema50);
-      if (fast === null || slow === null) return { action: "none" };
-      if (!context.position && fast > slow) {
-        return {
-          action: "enter",
-          side: "long",
-          stopPrice: stop,
-          takeProfitPrice: target,
-          reason: `EMA20 ${fast.toFixed(2)} above EMA50 ${slow.toFixed(2)}`,
-        };
-      }
-      if (context.position && fast < slow) return { action: "exit", reason: "EMA cross down" };
-      return { action: "none" };
-    }
-
-    if (name === "rsi-reversal") {
-      const rsiValue = latest(indicators.rsi);
-      if (rsiValue === null) return { action: "none" };
-      if (!context.position && rsiValue < 30) {
-        return {
-          action: "enter",
-          side: "long",
-          stopPrice: stop,
-          takeProfitPrice: target,
-          reason: `RSI ${rsiValue.toFixed(1)} oversold`,
-        };
-      }
-      if (context.position && rsiValue > 60) return { action: "exit", reason: "RSI recovered" };
-      return { action: "none" };
-    }
-
-    // breakout: close above the highest high of the prior 20 bars (excluding
-    // the current one, so the bar cannot break out of its own range).
-    const window = highs.slice(-21, -1);
-    const highest = Math.max(...window);
-    if (!context.position && price > highest) {
-      return {
-        action: "enter",
-        side: "long",
-        stopPrice: stop,
-        takeProfitPrice: target,
-        reason: `Close ${price.toFixed(2)} broke the 20-bar high ${highest.toFixed(2)}`,
-      };
-    }
-    return { action: "none" };
-  };
-}
 
 export async function POST(request: Request) {
   const denied = await requireSession();
@@ -125,10 +58,30 @@ export async function POST(request: Request) {
   const body = parsed.data;
   const candles = normalizeCandles(body.candles);
 
+  // Resolve the strategy: a preset id, or an inline rule tree that is validated
+  // before compiling so a broken definition fails loudly here rather than
+  // silently producing a strategy that never triggers.
+  const definition: StrategyDefinition | null = body.definition
+    ? (body.definition as unknown as StrategyDefinition)
+    : body.preset
+      ? STRATEGY_PRESETS[body.preset]
+      : null;
+
+  if (!definition) {
+    return NextResponse.json(
+      { error: "Provide either a preset id or a strategy definition." },
+      { status: 400 }
+    );
+  }
+  const issues = validateStrategyDefinition(definition);
+  if (issues.length > 0) {
+    return NextResponse.json({ error: "Invalid strategy definition", issues }, { status: 400 });
+  }
+
   const result = runBacktest({
     candles,
     timeframe: body.timeframe,
-    strategy: buildStrategy(body.strategy),
+    strategy: compileStrategy(definition),
     initialCapital: body.initialCapital,
     riskPerTrade: body.riskPerTrade,
     costs: {
