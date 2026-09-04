@@ -34,6 +34,13 @@ export interface TradePlanLevels {
 }
 
 export interface EntryEngineOptions {
+  /**
+   * Price the plan is built around. Defaults to the last bar's close, but a
+   * live quote is more recent and MUST be used when one exists — otherwise the
+   * stop is measured from a stale reference and can end up on the wrong side of
+   * the price the position is actually sized at.
+   */
+  referencePrice?: number;
   atrPeriod?: number;
   /** ATR multiple placing the stop beyond the structural level. */
   stopAtrBuffer?: number;
@@ -43,7 +50,9 @@ export interface EntryEngineOptions {
   targetRMultiples?: [number, number, number];
 }
 
-const DEFAULTS: Required<EntryEngineOptions> = {
+// referencePrice is excluded: it has no static default — it comes from the
+// live quote, or falls back to the last bar's close at call time.
+const DEFAULTS: Required<Omit<EntryEngineOptions, "referencePrice">> = {
   atrPeriod: 14,
   // A buffer beyond the level, so ordinary noise around it does not stop us out.
   stopAtrBuffer: 0.5,
@@ -78,7 +87,11 @@ export function buildTradePlanLevels(
   const atrValue = latest(atr(highs, lows, closes, o.atrPeriod));
   if (atrValue === null || atrValue <= 0) return null;
 
-  const price = closes[closes.length - 1];
+  const referencePrice = options.referencePrice;
+  const price =
+    referencePrice !== undefined && Number.isFinite(referencePrice) && referencePrice > 0
+      ? referencePrice
+      : closes[closes.length - 1];
   const rationale: string[] = [];
 
   const structuralStop = findStructuralStop(structure, side, price);

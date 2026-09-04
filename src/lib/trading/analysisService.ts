@@ -182,7 +182,12 @@ export function analyzeInstrument(request: AnalysisRequest): AnalysisResult {
 
   // --- Levels, then re-score WITH the resulting risk/reward, so R:R actually
   // influences the score rather than being reported alongside it.
-  const levels = buildTradePlanLevels(series.candles, structure, side);
+  // The live quote is more recent than the last bar's close, so the plan is
+  // built around it. Sizing then uses the SAME price (levels.preferredEntry),
+  // which is what keeps the stop on the correct side of the entry.
+  const lastClose = series.candles[series.candles.length - 1].close;
+  const referencePrice = request.quote?.last ?? lastClose;
+  const levels = buildTradePlanLevels(series.candles, structure, side, { referencePrice });
 
   const signal = computeSignal({
     candles: series.candles,
@@ -198,12 +203,10 @@ export function analyzeInstrument(request: AnalysisRequest): AnalysisResult {
     liveDataAvailable: liveAnalysisAllowed,
   });
 
-  // --- Sizing.
-  const lastClose = series.candles[series.candles.length - 1].close;
-  const entryPrice = request.quote?.last ?? lastClose;
+  // --- Sizing, from the plan's own entry so the two can never disagree.
   const sizing = levels
     ? calculatePositionSize({
-        entryPrice,
+        entryPrice: levels.preferredEntry,
         stopPrice: levels.stopLoss,
         side,
         settings: request.settings,

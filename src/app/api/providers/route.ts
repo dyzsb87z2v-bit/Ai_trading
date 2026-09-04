@@ -8,10 +8,13 @@
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/guard";
 import { summarizeProviders } from "@/lib/trading/providers/registry";
+import { bootstrapProviders } from "@/lib/trading/providers/bootstrap";
 
 export async function GET() {
   const denied = await requireSession();
   if (denied) return denied;
+
+  bootstrapProviders();
 
   const providers = summarizeProviders().map((provider) => ({
     ...provider,

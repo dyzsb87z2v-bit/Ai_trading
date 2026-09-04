@@ -150,11 +150,30 @@ export function evaluateSeries(
       reason: "Candle series is empty.",
     };
   }
+
   const newest = series.candles[series.candles.length - 1];
-  const budget = TIMEFRAME_MS[series.timeframe] * policy.candleMaxAgeMultiple;
-  // The bar's own close time is what ages, not its open time.
-  const closeTime = newest.timestamp + TIMEFRAME_MS[series.timeframe];
-  return evaluateProvenance({ ...series.provenance, timestamp: closeTime }, budget, now);
+  const step = TIMEFRAME_MS[series.timeframe];
+  const budget = step * policy.candleMaxAgeMultiple;
+
+  // A bar whose OPEN time is in the future is a genuine clock or feed fault —
+  // no feed can publish a bar that has not started.
+  if (newest.timestamp > now + 5_000) {
+    return {
+      status: "STALE",
+      ageMs: now - newest.timestamp,
+      liveAnalysisAllowed: false,
+      reason: `Newest bar opens ${newest.timestamp - now}ms in the future — clock or feed fault.`,
+    };
+  }
+
+  // The newest bar of a live series is normally still FORMING: its close time
+  // is up to one full timeframe ahead of now. That is not staleness, so age
+  // from the close time only once the bar has actually closed. Ageing a forming
+  // bar from its future close time would mark every live feed STALE.
+  const closeTime = newest.timestamp + step;
+  const effectiveTimestamp = Math.min(closeTime, now);
+
+  return evaluateProvenance({ ...series.provenance, timestamp: effectiveTimestamp }, budget, now);
 }
 
 /** Thrown when an engine is asked to produce a live signal from unusable data. */

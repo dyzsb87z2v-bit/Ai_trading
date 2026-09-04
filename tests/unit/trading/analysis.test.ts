@@ -470,3 +470,52 @@ test("signal: grades reflect conviction and NO_TRADE never earns a letter grade"
   const stale = computeSignal(signalInputFor(trending(1), { liveDataAvailable: false }));
   assert.equal(stale.grade, "NO_TRADE");
 });
+
+// ---------------------------------------------------------------------------
+// Regressions found by wiring a real market-data adapter
+// ---------------------------------------------------------------------------
+
+test("freshness: a still-FORMING newest bar is fresh, not stale", () => {
+  // The newest bar of any live series is still forming, so its close time is up
+  // to one full timeframe in the future. Ageing from that future close time
+  // marked EVERY live feed STALE — the bug this guards.
+  const now = 1_800_000_000_000;
+  const series: CandleSeries = {
+    instrument,
+    timeframe: "1H",
+    // Opened 60s ago; closes 59 minutes from now.
+    candles: [{ timestamp: now - 60_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 1 }],
+    provenance: { source: "p", timestamp: now - 60_000, status: "LIVE" },
+  };
+  const verdict = evaluateSeries(series, DEFAULT_FRESHNESS_POLICY, now);
+  assert.equal(verdict.status, "LIVE");
+  assert.equal(verdict.liveAnalysisAllowed, true, "a forming bar must not read as stale");
+});
+
+test("freshness: a bar that OPENS in the future is still a fault", () => {
+  const now = 1_800_000_000_000;
+  const series: CandleSeries = {
+    instrument,
+    timeframe: "1H",
+    candles: [{ timestamp: now + 600_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 1 }],
+    provenance: { source: "p", timestamp: now, status: "LIVE" },
+  };
+  const verdict = evaluateSeries(series, DEFAULT_FRESHNESS_POLICY, now);
+  assert.equal(verdict.status, "STALE");
+  assert.match(verdict.reason, /future/);
+});
+
+test("freshness: a long-closed newest bar still ages out", () => {
+  const now = 1_800_000_000_000;
+  const series: CandleSeries = {
+    instrument,
+    timeframe: "1H",
+    // Opened 10 hours ago, so it closed 9 hours ago — well past a 2.5x budget.
+    candles: [
+      { timestamp: now - 10 * 3_600_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 1 },
+    ],
+    provenance: { source: "p", timestamp: now, status: "LIVE" },
+  };
+  const verdict = evaluateSeries(series, DEFAULT_FRESHNESS_POLICY, now);
+  assert.equal(verdict.liveAnalysisAllowed, false);
+});

@@ -32,7 +32,7 @@ that data as live — see [Demo mode](#demo-mode).
 | ----------------------------- | -------------------------- |
 | `npm run dev`                 | Dev server on port 4310    |
 | `npm run build` / `npm start` | Production build and serve |
-| `npm test`                    | 192 unit tests             |
+| `npm test`                    | 220 unit tests             |
 | `npm run typecheck`           | Strict TypeScript check    |
 | `npm run lint`                | ESLint                     |
 | `npm run check`               | All three                  |
@@ -186,9 +186,34 @@ every score and level on the page is still computed.
 
 ## Providers
 
-The registry ships empty. Registering a market-data adapter means writing one
-against a real vendor API with real credentials; until then every read path
-reports `DATA SOURCE UNAVAILABLE`.
+### Binance (included, no API key)
+
+The one shipped adapter. Binance's public spot market-data endpoints need no
+credentials, so real prices work with a single flag:
+
+```bash
+BINANCE_ENABLED=true
+```
+
+Symbols are Binance spot pairs — `BTCUSDT`, `ETHUSDT`. **Not** `BTCUSD`. An
+unknown symbol returns Binance's own error plus a hint about the format; the
+adapter never rewrites a symbol, because labelling one instrument's data with
+another's name is exactly the quiet corruption this project avoids.
+
+Failure modes are distinguished rather than flattened: `RATE_LIMITED` (429),
+`IP_BANNED` (418), `PROVIDER_ERROR` (Binance's own `{code,msg}`),
+`NETWORK_ERROR`, `MALFORMED_RESPONSE`. Every one produces an `unavailable`
+result — never a fabricated price.
+
+`weightedAvgPrice` becomes the quote's VWAP because that is Binance's own 24h
+VWAP. If the order-book call fails, bid/ask stay `null` rather than guessed.
+
+Its unit tests stub `fetch` and make no network call.
+
+### Adding another
+
+Every other provider kind — news, fundamentals, economic calendar, broker —
+ships unregistered, so those read paths report `DATA SOURCE UNAVAILABLE`.
 
 To add one:
 
@@ -255,18 +280,20 @@ proxy before exposing it.
 ## Testing
 
 ```bash
-npm test        # 192 tests
+npm test        # 220 tests
 ```
 
-| File                        | Covers                                       |
-| --------------------------- | -------------------------------------------- |
-| `indicators.test.ts`        | Indicator maths against hand-derived values  |
-| `risk.test.ts`              | Sizing, the 13 risk checks, the entry engine |
-| `analysis.test.ts`          | Freshness, structure, MTF, regime, signal    |
-| `execution.test.ts`         | Look-ahead prevention, paper-trading P&L     |
-| `portfolio-copilot.test.ts` | Correlation, journal, evidence packet        |
-| `persistence.test.ts`       | Schema and upserts on a real SQLite database |
-| `orchestrator.test.ts`      | End-to-end verdicts and risk vetoes          |
+| File                         | Covers                                         |
+| ---------------------------- | ---------------------------------------------- |
+| `indicators.test.ts`         | Indicator maths against hand-derived values    |
+| `risk.test.ts`               | Sizing, the 13 risk checks, the entry engine   |
+| `analysis.test.ts`           | Freshness, structure, MTF, regime, signal      |
+| `execution.test.ts`          | Look-ahead prevention, paper-trading P&L       |
+| `portfolio-copilot.test.ts`  | Correlation, journal, evidence packet          |
+| `persistence.test.ts`        | Schema and upserts on a real SQLite database   |
+| `binance-adapter.test.ts`    | Adapter mapping and its whole failure taxonomy |
+| `provider-bootstrap.test.ts` | A provider is never enabled by accident        |
+| `orchestrator.test.ts`       | End-to-end verdicts and risk vetoes            |
 
 ---
 
@@ -274,8 +301,8 @@ npm test        # 192 tests
 
 Stated plainly so nothing is mistaken for complete:
 
-- **No provider adapters.** Contracts and registry exist; no vendor is
-  implemented, so no live data flows yet.
+- **Only one market-data adapter** (Binance, crypto spot). No stocks, forex,
+  news, fundamentals, economic-calendar or broker adapters.
 - **No streaming runtime.** `MarketDataProvider.subscribe()` is defined but no
   reconnect/backpressure loop consumes it.
 - **No market scanner**, no chart drawing tools.

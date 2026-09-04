@@ -14,6 +14,7 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/guard";
 import { getActiveMarketDataProvider } from "@/lib/trading/providers/registry";
+import { bootstrapProviders } from "@/lib/trading/providers/bootstrap";
 import {
   SIMULATED_DATA_NOTICE,
   generateSimulatedCandles,
@@ -35,6 +36,8 @@ const querySchema = z.object({
 export async function GET(request: Request) {
   const denied = await requireSession();
   if (denied) return denied;
+
+  bootstrapProviders();
 
   const url = new URL(request.url);
   const parsed = querySchema.safeParse({

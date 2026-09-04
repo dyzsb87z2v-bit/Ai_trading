@@ -530,3 +530,34 @@ test("entry engine: the stop sits beyond the invalidation level, not on it", () 
     "on a long, the stop must sit at or below the invalidation level"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Regression: the plan and the position size must share one entry price
+// ---------------------------------------------------------------------------
+
+test("entry engine: a live reference price overrides the last bar's close", () => {
+  const candles = trendingCandles();
+  const structure = analyzeStructure(candles);
+  const lastClose = candles[candles.length - 1].close;
+  // A live quote that has moved well away from the last close.
+  const live = lastClose * 1.05;
+
+  const plan = buildTradePlanLevels(candles, structure, "long", { referencePrice: live });
+  assert.ok(plan);
+  assert.equal(plan!.preferredEntry, live, "the plan must be built around the live price");
+  assert.ok(
+    plan!.stopLoss < plan!.preferredEntry,
+    "the stop must still sit below the entry after the reference moves"
+  );
+});
+
+test("entry engine: an invalid reference price falls back to the last close", () => {
+  const candles = trendingCandles();
+  const structure = analyzeStructure(candles);
+  const lastClose = candles[candles.length - 1].close;
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const plan = buildTradePlanLevels(candles, structure, "long", { referencePrice: bad });
+    assert.ok(plan);
+    assert.equal(plan!.preferredEntry, lastClose, `reference ${bad} should be rejected`);
+  }
+});
