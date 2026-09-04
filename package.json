@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test \"tests/unit/**/*.test.ts\"",
     "check": "npm run typecheck && npm run lint && npm run test",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"tests/**/*.ts\"",
+    "setup": "node scripts/setup.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",

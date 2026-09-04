@@ -16,26 +16,31 @@ own UI. No external service is required to run it.
 
 ```bash
 npm install
-cp .env.example .env
-
-# Set both values in .env:
-#   AUTH_SECRET   openssl rand -base64 48
-#   APP_PASSWORD  a password of your choosing
+npm run setup          # writes .env, prints your password
 npm run dev            # http://localhost:4310
 ```
+
+`npm run setup` generates the session signing secret and an account password
+into `.env` (mode 600, gitignored) and prints the password once. Neither value
+has a fallback: a default `AUTH_SECRET` would mean every install signs sessions
+with the same key. Re-running never overwrites an existing `.env`. Change
+`APP_PASSWORD` in that file to anything you prefer.
+
+For a production run use `npm run build && npm start` on the same port.
 
 With no market-data provider configured the terminal runs on a clearly labelled
 `SIMULATED` series so the interface is usable immediately. It never presents
 that data as live — see [Demo mode](#demo-mode).
 
-| Command                       | Does                       |
-| ----------------------------- | -------------------------- |
-| `npm run dev`                 | Dev server on port 4310    |
-| `npm run build` / `npm start` | Production build and serve |
-| `npm test`                    | 340 unit tests             |
-| `npm run typecheck`           | Strict TypeScript check    |
-| `npm run lint`                | ESLint                     |
-| `npm run check`               | All three                  |
+| Command                       | Does                         |
+| ----------------------------- | ---------------------------- |
+| `npm run setup`               | Generate `.env` on first run |
+| `npm run dev`                 | Dev server on port 4310      |
+| `npm run build` / `npm start` | Production build and serve   |
+| `npm test`                    | 340 unit tests               |
+| `npm run typecheck`           | Strict TypeScript check      |
+| `npm run lint`                | ESLint                       |
+| `npm run check`               | All three                    |
 
 ---
 
