@@ -514,3 +514,108 @@ test("paper: a cancelled order never fills", () => {
   paper.processQuote(quoteFor("AAPL", 94.9, 95.1, 94));
   assert.equal(paper.getState().orders[0].status, "cancelled");
 });
+
+// ---------------------------------------------------------------------------
+// Seeding a position so a stateless request can close it
+// ---------------------------------------------------------------------------
+
+function quoteAt(price: number, symbol = "AAPL"): Quote {
+  return {
+    instrument: { symbol, assetClass: "stock" },
+    last: price,
+    bid: price,
+    ask: price,
+    spread: 0,
+    volume: null,
+    tradeCount: null,
+    vwap: null,
+    changePercent: null,
+    session: "regular",
+    provenance: { source: "test", timestamp: 1_000, status: "PAPER" },
+  };
+}
+
+test("paper: a seeded position is not charged the entry costs a second time", () => {
+  const engine = new PaperTradingEngine({ initialCapital: 100_000 });
+  engine.seedPosition({
+    symbol: "AAPL",
+    side: "long",
+    quantity: 10,
+    averageEntryPrice: 100,
+    openedAt: 1_000,
+  });
+
+  const state = engine.getState();
+  assert.equal(state.positions.length, 1);
+  assert.equal(state.positions[0].averageEntryPrice, 100, "entry must survive verbatim");
+  assert.equal(state.totalFees, 0, "seeding is not a fill and pays no commission");
+  assert.equal(state.cash, 100_000, "seeding must not move cash");
+  assert.equal(state.realizedPnl, 0);
+});
+
+test("paper: seeding then closing realises the move, and only the exit pays costs", () => {
+  const engine = new PaperTradingEngine({ initialCapital: 100_000 });
+  engine.seedPosition({
+    symbol: "AAPL",
+    side: "long",
+    quantity: 10,
+    averageEntryPrice: 100,
+    openedAt: 1_000,
+  });
+
+  const order = engine.submitOrder(
+    { symbol: "AAPL", side: "sell", type: "market", quantity: 10 },
+    quoteAt(110)
+  );
+
+  assert.equal(order.status, "filled");
+  assert.ok(order.averageFillPrice !== null);
+  // A sell crosses the spread downward, so the fill is at or below the quote.
+  assert.ok(order.averageFillPrice! <= 110, "the exit must not fill better than the quote");
+
+  const state = engine.getState();
+  assert.equal(state.positions.length, 0, "the position must be gone");
+  // Gross P&L is the move on the actual fill, not on the quoted price.
+  const expectedGross = (order.averageFillPrice! - 100) * 10;
+  assert.ok(Math.abs(state.realizedPnl - expectedGross) < 1e-9);
+  assert.ok(state.totalFees > 0, "the exit leg pays commission");
+  assert.equal(state.totalFees, order.fees, "only ONE leg's fees are charged here");
+});
+
+test("paper: a short seeded position realises a gain when price falls", () => {
+  const engine = new PaperTradingEngine({ initialCapital: 100_000 });
+  engine.seedPosition({
+    symbol: "AAPL",
+    side: "short",
+    quantity: 5,
+    averageEntryPrice: 200,
+    openedAt: 1_000,
+  });
+  const order = engine.submitOrder(
+    { symbol: "AAPL", side: "buy", type: "market", quantity: 5 },
+    quoteAt(180)
+  );
+  assert.equal(order.status, "filled");
+  const state = engine.getState();
+  assert.ok(state.realizedPnl > 0, "a short that fell must be profitable gross of costs");
+  assert.equal(state.positions.length, 0);
+});
+
+test("paper: seeding rejects impossible positions rather than storing them", () => {
+  const engine = new PaperTradingEngine({ initialCapital: 100_000 });
+  const base = { symbol: "AAPL", side: "long" as const, openedAt: 1_000 };
+  assert.throws(
+    () => engine.seedPosition({ ...base, quantity: 0, averageEntryPrice: 100 }),
+    RangeError
+  );
+  assert.throws(
+    () => engine.seedPosition({ ...base, quantity: 10, averageEntryPrice: 0 }),
+    RangeError
+  );
+  engine.seedPosition({ ...base, quantity: 10, averageEntryPrice: 100 });
+  assert.throws(
+    () => engine.seedPosition({ ...base, quantity: 5, averageEntryPrice: 120 }),
+    /already exists/,
+    "seeding over an existing position would silently lose the first one"
+  );
+});

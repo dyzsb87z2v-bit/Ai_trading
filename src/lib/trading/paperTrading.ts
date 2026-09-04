@@ -123,6 +123,48 @@ export class PaperTradingEngine {
   }
 
   /**
+   * Restore a position the caller already holds, without treating it as a new
+   * fill.
+   *
+   * The app is stateless between requests, so closing a position that was
+   * opened by an earlier request means rebuilding the book first. Replaying the
+   * opening ORDER would be wrong: the stored entry price is already the filled
+   * price, so re-submitting it would cross the spread and charge commission a
+   * second time. Seeding restores the position as it stands and lets the
+   * closing order — and only the closing order — pay the exit costs.
+   */
+  seedPosition(input: {
+    symbol: string;
+    side: Side;
+    quantity: number;
+    averageEntryPrice: number;
+    openedAt: number;
+    realizedPnl?: number;
+  }): void {
+    if (input.quantity <= 0 || !Number.isFinite(input.quantity)) {
+      throw new RangeError("Seeded position quantity must be positive");
+    }
+    if (input.averageEntryPrice <= 0 || !Number.isFinite(input.averageEntryPrice)) {
+      throw new RangeError("Seeded position entry price must be positive");
+    }
+    if (this.positions.has(input.symbol)) {
+      throw new Error(`A position for ${input.symbol} already exists`);
+    }
+    this.positions.set(input.symbol, {
+      mode: "PAPER",
+      symbol: input.symbol,
+      side: input.side,
+      quantity: input.quantity,
+      averageEntryPrice: input.averageEntryPrice,
+      openedAt: input.openedAt,
+      realizedPnl: input.realizedPnl ?? 0,
+    });
+    // Mark at the entry price so equity reads flat until a real quote arrives.
+    // Leaving it unmarked would report the position as worth nothing.
+    this.marks.set(input.symbol, input.averageEntryPrice);
+  }
+
+  /**
    * Submit an order. Market orders attempt an immediate fill against `quote`;
    * limit and stop orders rest until `processQuote` triggers them.
    *

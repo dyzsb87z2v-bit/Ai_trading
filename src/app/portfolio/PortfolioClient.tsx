@@ -68,6 +68,9 @@ export function PortfolioClient() {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [quantity, setQuantity] = useState("10");
   const [price, setPrice] = useState("");
+  /** Exit price per open position, keyed by entry id. */
+  const [closePrices, setClosePrices] = useState<Record<string, string>>({});
+  const [closingId, setClosingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -116,6 +119,41 @@ export function PortfolioClient() {
     }
     await load();
   }, [symbol, side, quantity, price, load]);
+
+  const closePosition = useCallback(
+    async (id: string) => {
+      setError(null);
+      const exitPrice = Number(closePrices[id]);
+      if (!Number.isFinite(exitPrice) || exitPrice <= 0) {
+        // Same rule as the entry: a close filled at a guessed price would put a
+        // fabricated P&L into the journal, where it would look like a result.
+        setError("Closing a position needs the price it filled at.");
+        return;
+      }
+      setClosingId(id);
+      try {
+        const res = await fetch("/api/paper", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "close", entryId: id, price: exitPrice }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          setError(data.error ?? "The position could not be closed.");
+          return;
+        }
+        setClosePrices((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        await load();
+      } finally {
+        setClosingId(null);
+      }
+    },
+    [closePrices, load]
+  );
 
   const stats = state?.statistics;
 
@@ -237,6 +275,7 @@ export function PortfolioClient() {
                       <th className="px-3 py-2 text-right">Entry</th>
                       <th className="px-3 py-2">Opened</th>
                       <th className="px-3 py-2">Mode</th>
+                      <th className="px-3 py-2 text-right">Close</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -255,6 +294,27 @@ export function PortfolioClient() {
                           <Badge variant="warning" size="sm">
                             {row.executionMode}
                           </Badge>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center justify-end gap-2">
+                            <Input
+                              value={closePrices[row.id] ?? ""}
+                              onChange={(e) =>
+                                setClosePrices((prev) => ({ ...prev, [row.id]: e.target.value }))
+                              }
+                              inputMode="decimal"
+                              className="w-24"
+                              placeholder="exit price"
+                              aria-label={`Exit price for ${row.symbol}`}
+                            />
+                            <Button
+                              variant="secondary"
+                              onClick={() => void closePosition(row.id)}
+                              disabled={closingId === row.id}
+                            >
+                              {closingId === row.id ? "Closing…" : "Close"}
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}

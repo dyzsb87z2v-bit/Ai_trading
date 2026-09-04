@@ -476,7 +476,11 @@ export function getJournalEntries(accountId: string, limit = 500): StoredJournal
        ORDER BY COALESCE(closed_at, opened_at) DESC LIMIT ?`
     )
     .all(accountId, limit) as Row[];
-  return rows.map((row) => ({
+  return rows.map(mapJournalRow);
+}
+
+function mapJournalRow(row: Row): StoredJournalEntry {
+  return {
     id: row.id as string,
     accountId: row.account_id as string,
     symbol: row.symbol as string,
@@ -497,7 +501,45 @@ export function getJournalEntries(accountId: string, limit = 500): StoredJournal
     signalScore: (row.signal_score as number | null) ?? null,
     notes: (row.notes as string | null) ?? null,
     executionMode: row.execution_mode as string,
-  }));
+  };
+}
+
+export function getJournalEntry(id: string): StoredJournalEntry | null {
+  const rows = getDb()
+    .prepare(`SELECT * FROM journal_entries WHERE id = ? LIMIT 1`)
+    .all(id) as Row[];
+  if (rows.length === 0) return null;
+  return mapJournalRow(rows[0]);
+}
+
+export interface JournalCloseInput {
+  closedAt: number;
+  exitPrice: number;
+  netPnl: number;
+  rMultiple: number | null;
+  /** Total fees for the round trip: the entry leg plus the exit leg. */
+  fees: number;
+}
+
+/**
+ * Close an OPEN journal entry.
+ *
+ * The `closed_at IS NULL` predicate is the guard, not a convenience: two
+ * concurrent close requests would otherwise both compute a P&L from the same
+ * open position and the second would silently overwrite the first. The caller
+ * gets `null` when the row was already closed and can report that honestly
+ * instead of double-counting the trade.
+ */
+export function closeJournalEntry(id: string, input: JournalCloseInput): StoredJournalEntry | null {
+  const result = getDb()
+    .prepare(
+      `UPDATE journal_entries
+          SET closed_at = ?, exit_price = ?, net_pnl = ?, r_multiple = ?, fees = ?, updated_at = ?
+        WHERE id = ? AND closed_at IS NULL`
+    )
+    .run(input.closedAt, input.exitPrice, input.netPnl, input.rMultiple, input.fees, nowIso(), id);
+  if (result.changes === 0) return null;
+  return getJournalEntry(id);
 }
 
 // ---------------------------------------------------------------------------

@@ -197,6 +197,7 @@ export function ScannerClient() {
                   <thead className="border-b border-line text-[10px] uppercase tracking-wide text-muted">
                     <tr>
                       <th className="px-3 py-2">Symbol</th>
+                      <th className="px-3 py-2">Side</th>
                       <th className="px-3 py-2">State</th>
                       <th className="px-3 py-2 text-right">Score</th>
                       <th className="px-3 py-2">Verdict</th>
@@ -211,6 +212,12 @@ export function ScannerClient() {
                     {result.hits.map((hit) => (
                       <tr key={hit.symbol} className="border-b border-line/60 last:border-0">
                         <td className="px-3 py-2 font-mono font-semibold">{hit.symbol}</td>
+                        {/* Without the side, a short's stop ABOVE its entry reads as a bug. */}
+                        <td className="px-3 py-2 uppercase">
+                          <Badge variant={hit.side === "short" ? "danger" : "success"} size="sm">
+                            {hit.side}
+                          </Badge>
+                        </td>
                         <td className="px-3 py-2">
                           <Badge
                             variant={

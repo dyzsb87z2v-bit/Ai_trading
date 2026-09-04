@@ -425,3 +425,87 @@ test("strategies: save, reload and delete a rule tree", () => {
   db.deleteStrategy(saved.id);
   assert.equal(db.getStrategy(saved.id), null);
 });
+
+// ---------------------------------------------------------------------------
+// Closing a journal entry
+// ---------------------------------------------------------------------------
+
+function openEntry(symbol: string) {
+  return db.createJournalEntry({
+    accountId: "paper-close",
+    symbol,
+    side: "long",
+    openedAt: 1_000,
+    closedAt: null,
+    entryPrice: 100,
+    exitPrice: null,
+    stopPrice: 95,
+    targetPrices: [110],
+    quantity: 10,
+    riskAmount: 50,
+    netPnl: null,
+    rMultiple: null,
+    fees: 1.5,
+    strategy: null,
+    marketRegime: null,
+    signalScore: null,
+    notes: null,
+    executionMode: "PAPER",
+  });
+}
+
+test("journal: getJournalEntry reads back a single row", () => {
+  const created = openEntry("READ1");
+  const found = db.getJournalEntry(created.id);
+  assert.ok(found);
+  assert.equal(found!.symbol, "READ1");
+  assert.equal(found!.closedAt, null);
+  assert.deepEqual(found!.targetPrices, [110]);
+});
+
+test("journal: getJournalEntry returns null for an unknown id", () => {
+  assert.equal(db.getJournalEntry("does-not-exist"), null);
+});
+
+test("journal: closing an entry records the exit, P&L and round-trip fees", () => {
+  const created = openEntry("CLOSE1");
+  const closed = db.closeJournalEntry(created.id, {
+    closedAt: 2_000,
+    exitPrice: 108,
+    netPnl: 76.5,
+    rMultiple: 1.53,
+    fees: 3.1,
+  });
+  assert.ok(closed);
+  assert.equal(closed!.closedAt, 2_000);
+  assert.equal(closed!.exitPrice, 108);
+  assert.equal(closed!.netPnl, 76.5);
+  assert.equal(closed!.rMultiple, 1.53);
+  assert.equal(closed!.fees, 3.1);
+});
+
+test("journal: a second close is refused, so one trade cannot be counted twice", () => {
+  const created = openEntry("CLOSE2");
+  const first = db.closeJournalEntry(created.id, {
+    closedAt: 2_000,
+    exitPrice: 108,
+    netPnl: 76.5,
+    rMultiple: 1.53,
+    fees: 3.1,
+  });
+  assert.ok(first, "the first close must succeed");
+
+  const second = db.closeJournalEntry(created.id, {
+    closedAt: 3_000,
+    exitPrice: 50,
+    netPnl: -500,
+    rMultiple: -10,
+    fees: 3.1,
+  });
+  assert.equal(second, null, "a repeated close must be refused, not applied");
+
+  // The original close must be untouched by the refused one.
+  const stored = db.getJournalEntry(created.id);
+  assert.equal(stored!.netPnl, 76.5);
+  assert.equal(stored!.exitPrice, 108);
+});

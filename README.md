@@ -32,7 +32,7 @@ that data as live — see [Demo mode](#demo-mode).
 | ----------------------------- | -------------------------- |
 | `npm run dev`                 | Dev server on port 4310    |
 | `npm run build` / `npm start` | Production build and serve |
-| `npm test`                    | 332 unit tests             |
+| `npm test`                    | 340 unit tests             |
 | `npm run typecheck`           | Strict TypeScript check    |
 | `npm run lint`                | ESLint                     |
 | `npm run check`               | All three                  |
@@ -362,7 +362,7 @@ All routes require a session cookie.
 | `/api/alerts/evaluate`                      | POST                  | Evaluate rules against current data       |
 | `/api/strategies`                           | GET/POST/DELETE       | Strategy Lab presets and definitions      |
 | `/api/backtest`                             | POST                  | Backtest a preset or a compiled rule tree |
-| `/api/paper`                                | GET/POST              | Paper positions, exposure and correlation |
+| `/api/paper`                                | GET/POST              | Paper positions: open, close, exposure    |
 | `/api/journal`                              | GET/POST              | Trade journal entries                     |
 | `/api/position-size`                        | POST                  | Sizing with true maximum loss             |
 | `/api/risk-settings`                        | GET/PUT               | Read/update risk limits                   |
@@ -396,7 +396,7 @@ proxy before exposing it.
 ## Testing
 
 ```bash
-npm test        # 332 tests
+npm test        # 340 tests
 ```
 
 | File                         | Covers                                           |

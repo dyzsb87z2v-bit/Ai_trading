@@ -93,10 +93,13 @@ export function WatchlistPanel({
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
           placeholder="Add symbol"
-          className="flex-1"
+          // min-w-0 defeats the intrinsic min-width an <input> gets from
+          // flex-basis:auto, which otherwise refuses to shrink and pushes the
+          // Add button off the edge of the panel.
+          className="min-w-0 flex-1"
           aria-label="Add symbol to watchlist"
         />
-        <Button type="submit" size="sm" variant="secondary">
+        <Button type="submit" size="sm" variant="secondary" className="shrink-0">
           Add
         </Button>
       </form>
