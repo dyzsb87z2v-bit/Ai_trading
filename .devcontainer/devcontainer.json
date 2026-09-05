@@ -2,9 +2,15 @@
   "name": "AI Trading Terminal",
   "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
 
-  // Installs dependencies and writes .env with a generated secret and
-  // password. The password is printed once in the creation log.
+  // Runs once, when the container is built: install dependencies and write
+  // .env with a generated signing secret and password.
   "postCreateCommand": "npm install && npm run setup",
+
+  // Runs every time the workspace is opened. The script prints the sign-in
+  // password and starts the server, or says so and exits if one is already
+  // listening — reconnecting must not fail with EADDRINUSE or start a second
+  // server against the same SQLite file.
+  "postAttachCommand": "npm run start:workspace",
 
   "forwardPorts": [4310],
   "portsAttributes": {

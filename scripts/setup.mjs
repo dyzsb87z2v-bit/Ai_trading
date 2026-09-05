@@ -43,8 +43,19 @@ writeFileSync(envPath, text);
 // ignored. Set it explicitly — this file holds the account password.
 chmodSync(envPath, 0o600);
 
+// Also drop the password in a file at the workspace root. In a browser IDE
+// the creation log is easy to lose; a file you can open in the tree is not.
+const passwordFile = join(root, "YOUR-PASSWORD.txt");
+writeFileSync(
+  passwordFile,
+  `Sign-in password for the AI Trading Terminal\n\n    ${password}\n\n` +
+    `Change it by editing APP_PASSWORD in .env, then restart the server.\n` +
+    `This file is gitignored and is never committed.\n`,
+  { mode: 0o600 }
+);
+
 console.log("Created .env with a freshly generated signing secret.\n");
 console.log("  Your password:  " + password + "\n");
-console.log("It is stored in .env (chmod 600, gitignored). Change APP_PASSWORD");
-console.log("there to anything you prefer, then:\n");
+console.log("Also saved to YOUR-PASSWORD.txt. Both files are gitignored.");
+console.log("Change APP_PASSWORD in .env to anything you prefer, then:\n");
 console.log("  npm run dev     →  http://localhost:4310\n");

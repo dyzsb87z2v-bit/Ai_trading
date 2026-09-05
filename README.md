@@ -37,12 +37,15 @@ that data as live — see [Demo mode](#demo-mode).
 The repository ships a dev container, so **GitHub Codespaces** runs the whole
 terminal in a browser tab — phone or tablet included, with no local install.
 
-1. Open the repository on GitHub → **Code** → **Codespaces** → **Create
-   codespace on main**.
-2. Wait for setup to finish. It runs `npm install && npm run setup`; the
-   generated password is printed at the end of that log. Copy it.
-3. In the terminal, run `npm run dev`. Codespaces forwards port 4310 and
-   offers the link — open it and sign in with that password.
+Open the repository on GitHub → **Code** → **Codespaces** → **Create codespace
+on main**. Nothing else is required: the container installs dependencies,
+generates `.env`, starts the server and offers the forwarded port. The sign-in
+password is printed in the terminal panel and saved to `YOUR-PASSWORD.txt`,
+which you can open from the file tree.
+
+Closing and reopening the codespace just restarts it — the start script exits
+quietly if a server is already listening rather than starting a second one
+against the same database.
 
 The forwarded port is **private to your GitHub account** by default. Leave it
 that way: this app authenticates one operator with one password and is not
