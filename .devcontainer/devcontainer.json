@@ -4,7 +4,7 @@
 
   // Runs once, when the container is built: install dependencies and write
   // .env with a generated signing secret and password.
-  "postCreateCommand": "npm install && npm run setup",
+  "postCreateCommand": "npm install && SETUP_ENABLE_BINANCE=1 npm run setup",
 
   // Runs every time the workspace is opened. The script prints the sign-in
   // password and starts the server, or says so and exits if one is already

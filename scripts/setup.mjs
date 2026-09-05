@@ -38,6 +38,14 @@ const password = randomBytes(12).toString("base64url");
 let text = readFileSync(envPath, "utf8");
 text = text.replace(/^AUTH_SECRET=.*$/m, `AUTH_SECRET=${secret}`);
 text = text.replace(/^APP_PASSWORD=.*$/m, `APP_PASSWORD=${password}`);
+
+// Binance's public spot endpoints need no key and no account, so a hosted
+// workspace can come up on real prices with nothing to configure. Opt-in via
+// the environment so a plain local `npm run setup` keeps every provider off.
+const enableBinance = /^(1|true|yes|on)$/i.test(process.env.SETUP_ENABLE_BINANCE ?? "");
+if (enableBinance) {
+  text = text.replace(/^BINANCE_ENABLED=.*$/m, "BINANCE_ENABLED=true");
+}
 writeFileSync(envPath, text);
 // copyFileSync already created the file, so writeFileSync's `mode` would be
 // ignored. Set it explicitly — this file holds the account password.
@@ -57,5 +65,9 @@ writeFileSync(
 console.log("Created .env with a freshly generated signing secret.\n");
 console.log("  Your password:  " + password + "\n");
 console.log("Also saved to YOUR-PASSWORD.txt. Both files are gitignored.");
+if (enableBinance) {
+  console.log("Binance public market data is ON — crypto symbols are real prices.");
+  console.log("Use Binance spot pairs: BTCUSDT, ETHUSDT (not BTCUSD).");
+}
 console.log("Change APP_PASSWORD in .env to anything you prefer, then:\n");
 console.log("  npm run dev     →  http://localhost:4310\n");
